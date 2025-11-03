@@ -18,7 +18,7 @@ fn broadcast_add[
     a_layout: Layout,
     b_layout: Layout,
 ](
-    out: LayoutTensor[mut=True, dtype, out_layout],
+    output: LayoutTensor[mut=True, dtype, out_layout],
     a: LayoutTensor[mut=False, dtype, a_layout],
     b: LayoutTensor[mut=False, dtype, b_layout],
     size: Int,
@@ -26,7 +26,7 @@ fn broadcast_add[
     row = thread_idx.y
     col = thread_idx.x
     if row < size and col < size:
-        out[row, col] = a[0, col] + b[row, 0]
+        output[row, col] = a[0, col] + b[row, 0]
 
 
 # ANCHOR_END: broadcast_add_layout_tensor_solution
@@ -51,12 +51,12 @@ def main():
         b = ctx.enqueue_create_buffer[dtype](SIZE).enqueue_fill(0)
         with a.map_to_host() as a_host, b.map_to_host() as b_host:
             for i in range(SIZE):
-                a_host[i] = i
-                b_host[i] = i
+                a_host[i] = i + 1
+                b_host[i] = i * 10
 
             for i in range(SIZE):
                 for j in range(SIZE):
-                    expected_tensor[i, j] = a_host[i] + b_host[j]
+                    expected_tensor[i, j] = a_host[j] + b_host[i]
 
         a_tensor = LayoutTensor[dtype, a_layout](a.unsafe_ptr())
         b_tensor = LayoutTensor[dtype, b_layout](b.unsafe_ptr())

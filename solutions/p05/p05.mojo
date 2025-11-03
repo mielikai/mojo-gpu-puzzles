@@ -11,7 +11,7 @@ alias dtype = DType.float32
 
 # ANCHOR: broadcast_add_solution
 fn broadcast_add(
-    out: UnsafePointer[Scalar[dtype]],
+    output: UnsafePointer[Scalar[dtype]],
     a: UnsafePointer[Scalar[dtype]],
     b: UnsafePointer[Scalar[dtype]],
     size: Int,
@@ -19,7 +19,7 @@ fn broadcast_add(
     row = thread_idx.y
     col = thread_idx.x
     if row < size and col < size:
-        out[row * size + col] = a[col] + b[row]
+        output[row * size + col] = a[col] + b[row]
 
 
 # ANCHOR_END: broadcast_add_solution
@@ -35,8 +35,8 @@ def main():
         b = ctx.enqueue_create_buffer[dtype](SIZE).enqueue_fill(0)
         with a.map_to_host() as a_host, b.map_to_host() as b_host:
             for i in range(SIZE):
-                a_host[i] = i
-                b_host[i] = i
+                a_host[i] = i + 1
+                b_host[i] = i * 10
 
             for y in range(SIZE):
                 for x in range(SIZE):

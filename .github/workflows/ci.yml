@@ -4,29 +4,27 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - 'README.md'
+      - 'LICENSE'
+      - 'CODE_OF_CONDUCT.md'
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - 'README.md'
+      - 'LICENSE'
+      - 'CODE_OF_CONDUCT.md'
 
 permissions:
   id-token: write
   contents: write
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    environment: VERCEL
+  test:
+    runs-on: github-gpu
     steps:
       - uses: actions/checkout@v4
-
-      # Add Rust caching for mdbook
-      - uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/pixi.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
 
       - uses: actions/cache@v3
         with:
@@ -35,9 +33,39 @@ jobs:
             ~/.cache/modular
           key: ${{ runner.os }}-modular-${{ hashFiles('**/pixi.toml') }}
 
-      - uses: prefix-dev/setup-pixi@v0.8.8
+      - uses: prefix-dev/setup-pixi@v0.9.0
         with:
-          pixi-version: v0.47.0
+          pixi-version: v0.53.0
+          cache: false
+          post-cleanup: false
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          pixi run format-check
+
+      - name: Tests
+        shell: bash
+        run: |
+          pixi run tests
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.modular
+            ~/.cache/modular
+          key: ${{ runner.os }}-modular-${{ hashFiles('**/pixi.toml') }}
+
+      - uses: prefix-dev/setup-pixi@v0.9.0
+        with:
+          pixi-version: v0.53.0
           cache: false
           post-cleanup: false
 
@@ -47,27 +75,11 @@ jobs:
           cd book
           pixi run build-book
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      # Cache global npm packages
-      - uses: actions/cache@v3
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-global-packages
-
-      - name: Install Vercel CLI
-        run: npm install -g vercel
-
-      - name: Trigger Vercel Redeploy
-        run: vercel redeploy ${{ secrets.VERCEL_DEPLOYMENT_URL }} --scope=${{ secrets.VERCEL_SCOPE }} --token=${{ secrets.VERCEL_TOKEN }}
-
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_branch: gh-pages
           publish_dir: ./book/html
+          cname: puzzles.modular.com
           allow_empty_commit: true

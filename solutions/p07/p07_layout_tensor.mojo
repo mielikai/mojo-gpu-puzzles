@@ -16,14 +16,14 @@ fn add_10_blocks_2d[
     out_layout: Layout,
     a_layout: Layout,
 ](
-    out: LayoutTensor[mut=True, dtype, out_layout],
+    output: LayoutTensor[mut=True, dtype, out_layout],
     a: LayoutTensor[mut=False, dtype, a_layout],
     size: Int,
 ):
     row = block_dim.y * block_idx.y + thread_idx.y
     col = block_dim.x * block_idx.x + thread_idx.x
     if row < size and col < size:
-        out[row, col] = a[row, col] + 10.0
+        output[row, col] = a[row, col] + 10.0
 
 
 # ANCHOR_END: add_10_blocks_2d_layout_tensor_solution
@@ -41,6 +41,14 @@ def main():
         ).enqueue_fill(1)
 
         a = ctx.enqueue_create_buffer[dtype](SIZE * SIZE).enqueue_fill(1)
+
+        with a.map_to_host() as a_host:
+            for j in range(SIZE):
+                for i in range(SIZE):
+                    k = j * SIZE + i
+                    a_host[k] = k
+                    expected_buf[k] = k + 10
+
         a_tensor = LayoutTensor[dtype, a_layout, MutableAnyOrigin](
             a.unsafe_ptr()
         )
@@ -58,9 +66,6 @@ def main():
         expected_tensor = LayoutTensor[dtype, out_layout, MutableAnyOrigin](
             expected_buf.unsafe_ptr()
         )
-        for i in range(SIZE):
-            for j in range(SIZE):
-                expected_tensor[i, j] += 10
 
         with out_buf.map_to_host() as out_buf_host:
             print(

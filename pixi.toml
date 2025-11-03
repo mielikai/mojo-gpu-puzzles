@@ -1,15 +1,64 @@
-[project]
+[workspace]
 authors = ["Modular <hello@modular.com>"]
-channels = ["https://conda.modular.com/max-nightly", "https://conda.modular.com/max", "https://repo.prefix.dev/modular-community", "conda-forge"]
+channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
 name = "mojo-gpu-puzzles"
 platforms = ["linux-64", "osx-arm64"]
-version = "0.0.0"
+version = "1.0.0"
+
+[feature.nvidia]
+system-requirements = { cuda = "12" }
+channels = ["nvidia"]
+
+[feature.nvidia.target.linux-64.dependencies]
+cuda-toolkit = "12.*" # for compute-sanitizer etc.
+cuda-gdb = "12.*"     # for GPU kernel debugging
+nsight-compute = "*"  # interactive kernel profiling
+
+[feature.nvidia.target.linux-64.pypi-dependencies]
+torch = { version = "==2.7.1", index = "https://download.pytorch.org/whl/cu128" }
+nvidia-ml-py = "*"
+
+[feature.amd]
+system-requirements = {}
+
+[feature.amd.target.linux-64.pypi-dependencies]
+torch = { version = "==2.7.1", index = "https://download.pytorch.org/whl/rocm6.3" }
+pytorch-triton-rocm = {version = "*", index = "https://download.pytorch.org/whl/rocm6.3" }
+
+[feature.apple]
+system-requirements = { macos = "15.0" }
+
+[dependencies]
+python = "==3.12"
+mojo = "<1.0.0" # includes `mojo-compiler`, lsp, debugger, formatter etc.
+max = "*"
+bash = ">=5.2.21,<6"
+manim = ">=0.18.1,<0.19"
+mdbook = ">=0.4.48,<0.5"
+pre-commit = ">=4.2.0,<5"
+
+[environments]
+nvidia = { features = ["nvidia"], solve-group = "nvidia" }
+amd = { features = ["amd"], solve-group = "amd" }
+apple = { features = ["apple"], solve-group = "apple" }
+default = { features = ["nvidia"] }
 
 [tasks]
 install-pre-commit = "pre-commit install"
 format = { cmd="mojo format problems solutions", depends-on = ["install-pre-commit"] }
+format-check = { cmd = "bash -c 'mojo format problems solutions && git diff --exit-code problems solutions || (echo \"Error: Code is not formatted. Run \\\"pixi run format\\\" to fix.\" && exit 1)'", description = "Check if code is formatted without modifying files" }
 
 tests = { cmd = "bash solutions/run.sh" }
+
+# Fix conda cuda-gdb by linking to system CUDA installation
+setup-cuda-gdb = { cmd = "ln -sf /usr/local/cuda/bin/cuda-gdb-minimal $CONDA_PREFIX/bin/cuda-gdb-minimal && ln -sf /usr/local/cuda/bin/cuda-gdb-python3.12-tui $CONDA_PREFIX/bin/cuda-gdb-python3.12-tui", description = "Link system CUDA-GDB binaries to conda environment" }
+
+set-buffer-cache = { cmd = "export MODULAR_DEVICE_CONTEXT_BUFFER_CACHE_SIZE_PERCENT=0" }
+memcheck = { cmd = "bash solutions/sanitizer.sh memcheck", depends-on = ["set-buffer-cache"] }
+racecheck = { cmd = "bash solutions/sanitizer.sh racecheck", depends-on = ["set-buffer-cache"] }
+synccheck = { cmd = "bash solutions/sanitizer.sh synccheck", depends-on = ["set-buffer-cache"] }
+initcheck = { cmd = "bash solutions/sanitizer.sh initcheck", depends-on = ["set-buffer-cache"] }
+sanitizers = { cmd = "bash solutions/sanitizer.sh all", depends-on = ["set-buffer-cache"] }
 
 build-book = "cd book && mdbook build"
 book = { cmd = "cd book && mdbook serve --open", depends-on = ["build-book"] }
@@ -46,17 +95,15 @@ p08_layout_tensor = "mojo problems/p08/p08_layout_tensor.mojo"
 viz08 = "cd book/src/puzzle_08 && python puzzle_08_viz.py"
 
 p09 = "mojo problems/p09/p09.mojo"
-p09_layout_tensor = "mojo problems/p09/p09_layout_tensor.mojo"
-viz09 = "cd book/src/puzzle_09 && python puzzle_09_viz.py"
 
 p10 = "mojo problems/p10/p10.mojo"
-p10_layout_tensor = "mojo problems/p10/p10_layout_tensor.mojo"
-viz10 = "cd book/src/puzzle_10 && python puzzle_10_viz.py"
 
 p11 = "mojo problems/p11/p11.mojo"
+p11_layout_tensor = "mojo problems/p11/p11_layout_tensor.mojo"
 viz11 = "cd book/src/puzzle_11 && python puzzle_11_viz.py"
 
 p12 = "mojo problems/p12/p12.mojo"
+p12_layout_tensor = "mojo problems/p12/p12_layout_tensor.mojo"
 viz12 = "cd book/src/puzzle_12 && python puzzle_12_viz.py"
 
 p13 = "mojo problems/p13/p13.mojo"
@@ -65,12 +112,61 @@ viz13 = "cd book/src/puzzle_13 && python puzzle_13_viz.py"
 p14 = "mojo problems/p14/p14.mojo"
 viz14 = "cd book/src/puzzle_14 && python puzzle_14_viz.py"
 
-p15 = "cd problems/p15 && mojo package op -o op.mojopkg && python p15.py"
+p15 = "mojo problems/p15/p15.mojo"
+viz15 = "cd book/src/puzzle_15 && python puzzle_15_viz.py"
 
-[dependencies]
-max = "*"
-bash = ">=5.2.21,<6"
-python = "==3.12"
-manim = ">=0.18.1,<0.19"
-mdbook = ">=0.4.48,<0.5"
-pre-commit = ">=4.2.0,<5"
+p16 = "mojo problems/p16/p16.mojo"
+viz16 = "cd book/src/puzzle_16 && python puzzle_16_viz.py"
+rooflineviz = "cd book/src/puzzle_16 && python roofline_viz.py"
+
+p17 = "mojo package problems/p17/op -o problems/p17/op.mojopkg && python problems/p17/p17.py"
+
+p18-package = "mojo package problems/p18/op -o problems/p18/op.mojopkg"
+p18-test-kernels = { cmd = "mojo run -I problems/p18 problems/p18/test/test_softmax.mojo", depends-on = ["p18-package"] }
+p18 = { cmd = "python problems/p18/p18.py", depends-on = ["p18-package"] }
+
+p19 = "mojo package problems/p19/op -o problems/p19/op.mojopkg && python problems/p19/p19.py"
+
+p20 = "python problems/p20/p20.py"
+
+p21 = "python problems/p21/p21.py"
+
+p22 = "python problems/p22/p22.py"
+
+p23 = "mojo problems/p23/p23.mojo"
+
+p24 = "mojo problems/p24/p24.mojo"
+
+p25 = "mojo problems/p25/p25.mojo"
+
+p26 = "mojo problems/p26/p26.mojo"
+
+p27 = "mojo problems/p27/p27.mojo"
+
+p28 = "mojo problems/p28/p28.mojo"
+
+p29 = "mojo problems/p29/p29.mojo"
+
+p30 = "mojo problems/p30/p30.mojo"
+
+p31 = "mojo problems/p31/p31.mojo"
+
+p32 = "mojo problems/p32/p32.mojo"
+
+p33 = "mojo problems/p33/p33.mojo"
+
+p34 = "mojo problems/p34/p34.mojo"
+
+# NVIDIA GPU information and profiling utilities
+gpu-info = { cmd = "nvidia-smi --query-gpu=name,compute_cap,memory.total,driver_version --format=csv", description = "Get basic GPU information" }
+
+# GPU specs
+gpu-specs = { cmd = "python3 scripts/gpu_specs.py", description = "Get complete GPU architectural specifications (NVIDIA/AMD/Apple Silicon)" }
+
+# macOS
+check-macos = { cmd = "sw_vers -productVersion | awk -F. '{if($1<15) {print \"Error: macOS 15+ required, found \" $0; exit 1}}'", description = "Ensure macOS 15+" }
+
+generate-animations = { cmd = "echo 'All animations generated!'", depends-on = ["viz01", "viz02", "viz03", "viz04", "viz05", "viz06", "viz07", "viz08", "viz11", "viz12", "viz13", "viz14", "viz15", "viz16", "rooflineviz", "thread_indexing"] }
+clean-animations = "find book/src -type d -name media | xargs rm -rf"
+clean-profiles = "bash -c 'find . -maxdepth 1 -type f \\( -name \"*.sqlite\" -o -name \"*.txt\" -o -name \"*.nsys-rep\" -o -name \"*.ncu-rep\" \\) -delete && find problems -type f \\( -name \"*.sqlite\" -o -name \"*.txt\" -o -name \"*.nsys-rep\" -o -name \"*.ncu-rep\" \\) -delete'"
+clean-all = { cmd = "cleanup is done!", depends-on = ["clean-animations", "clean-profiles"] }

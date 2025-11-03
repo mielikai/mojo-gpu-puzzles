@@ -1,8 +1,8 @@
 from memory import UnsafePointer
 from gpu import thread_idx, block_idx, block_dim, barrier
 from gpu.host import DeviceContext
+from gpu.memory import AddressSpace
 from layout import Layout, LayoutTensor
-from layout.tensor_builder import LayoutTensorBuild as tb
 from testing import assert_equal
 
 alias TPB = 4
@@ -17,12 +17,17 @@ alias layout = Layout.row_major(SIZE)
 fn add_10_shared_layout_tensor[
     layout: Layout
 ](
-    out: LayoutTensor[mut=True, dtype, layout],
+    output: LayoutTensor[mut=True, dtype, layout],
     a: LayoutTensor[mut=True, dtype, layout],
     size: Int,
 ):
     # Allocate shared memory using tensor builder
-    shared = tb[dtype]().row_major[TPB]().shared().alloc()
+    shared = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB),
+        MutableAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
 
     global_i = block_dim.x * block_idx.x + thread_idx.x
     local_i = thread_idx.x
@@ -30,10 +35,14 @@ fn add_10_shared_layout_tensor[
     if global_i < size:
         shared[local_i] = a[global_i]
 
+    # Note: barrier is not strictly needed here since each thread only accesses its own shared memory location.
+    # However, it's included to teach proper shared memory synchronization patterns
+    # for more complex scenarios where threads need to coordinate access to shared data.
+    # For this specific puzzle, we can remove the barrier since each thread only accesses its own shared memory location.
     barrier()
 
     if global_i < size:
-        out[global_i] = shared[local_i] + 10
+        output[global_i] = shared[local_i] + 10
 
 
 # ANCHOR_END: add_10_shared_layout_tensor_solution

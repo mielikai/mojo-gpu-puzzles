@@ -4,6 +4,7 @@ language = "en"
 multilingual = false
 src = "src"
 title = "Mojo 🔥 GPU Puzzles"
+version = "1.0.0"
 
 [output.html]
 additional-css = [
@@ -21,14 +22,14 @@ additional-js = [
 default-theme = "light"
 preferred-dark-theme = "ayu"
 copy-fonts = true
+favicon_svg=true
 smart-punctuation = true
 no-section-label = true
 git-repository-url = "https://github.com/modular/mojo-gpu-puzzles"
 mathjax-support = true
 theme-switcher = true
 no-theme-selection = false
-draft = true
-favicon = "images/puzzle-mark.svg"
+draft = false
 
 [output.html.highlight]
 enable = true
@@ -56,7 +57,7 @@ mode = "katex"
 [build]
 build-dir = "html"
 create-missing = true
-extra-files = ["logo", "images"]
+extra-files = ["logo", "puzzles_images"]
 
 [preprocessor.index]
 index = false

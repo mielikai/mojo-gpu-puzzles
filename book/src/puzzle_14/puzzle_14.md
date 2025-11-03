@@ -1,32 +1,45 @@
-# Puzzle 14: Matrix Multiplication (MatMul)
+# Puzzle 14: Prefix Sum
 
 ## Overview
 
-Matrix multiplication is a fundamental operation in scientific computing, machine learning, and graphics. Given two matrices \\(A\\) and \\(B\\), we want to compute their product \\(C = A \\times B.\\)
+Prefix sum (also known as _scan_) is a fundamental parallel algorithm that computes running totals of a sequence. Found at the heart of many parallel applications - from sorting algorithms to scientific simulations - it transforms a sequence of numbers into their running totals. While simple to compute sequentially, making this efficient on a GPU requires clever parallel thinking!
 
-For matrices \\(A_{m\\times k}\\) and \\(B_{k\\times n}\\), each element of the result \\(C_{m\\times n}\\) is computed as:
+Implement a kernel that computes a prefix-sum over 1D LayoutTensor `a` and stores it in 1D LayoutTensor `output`.
 
-\\[\Large C_{ij} = \sum_{l=0}^{k-1} A_{il} \\cdot B_{lj} \\]
+**Note:** _If the size of `a` is greater than the block size, only store the sum of each block._
 
-![Matrix Multiply visualization](./media/videos/720p30/puzzle_14_viz.gif)
+![Prefix sum](./media/videos/720p30/puzzle_14_viz.gif)
 
-This puzzle explores different approaches to implementing matrix multiplication on GPUs, each with its own performance characteristics:
+## Key concepts
 
-- [Naive Version](./naive.md)
-  The straightforward implementation where each thread computes one element of the output matrix. While simple to understand, this approach makes many redundant memory accesses.
+In this puzzle, you'll learn about:
 
-- [Shared Memory Version](./shared_memory.md)
-  Improves performance by loading blocks of input matrices into fast shared memory, reducing global memory accesses. Each thread still computes one output element but reads from shared memory.
+- Parallel algorithms with logarithmic complexity
+- Shared memory coordination patterns
+- Multi-phase computation strategies
 
-- [Tiled Version](./tiled.md)
-  Further optimizes by dividing the computation into tiles, allowing threads to cooperate on loading and computing blocks of the output matrix. This approach better utilizes memory hierarchy and thread cooperation.
+The key insight is understanding how to transform a sequential operation into an efficient parallel algorithm using shared memory.
 
-Each version builds upon the previous one, introducing new optimization techniques common in GPU programming. You'll learn how different memory access patterns and thread cooperation strategies affect performance.
+For example, given an input sequence \\([3, 1, 4, 1, 5, 9]\\), the prefix sum would produce:
 
-The progression illustrates a common pattern in GPU optimization:
-1. Start with a correct but naive implementation
-2. Reduce global memory access with shared memory
-3. Improve data locality and thread cooperation with tiling
-4. Use high-level abstractions while maintaining performance
+- \\([3]\\) (just the first element)
+- \\([3, 4]\\) (3 + 1)
+- \\([3, 4, 8]\\) (previous sum + 4)
+- \\([3, 4, 8, 9]\\) (previous sum + 1)
+- \\([3, 4, 8, 9, 14]\\) (previous sum + 5)
+- \\([3, 4, 8, 9, 14, 23]\\) (previous sum + 9)
 
-Choose a version to begin your matrix multiplication journey!
+Mathematically, for a sequence \\([x_0, x_1, ..., x_n]\\), the prefix sum produces:
+\\[ [x_0, x_0+x_1, x_0+x_1+x_2, ..., \sum_{i=0}^n x_i] \\]
+
+While a sequential algorithm would need \\(O(n)\\) steps, our parallel approach will use a clever two-phase algorithm that completes in \\(O(\log n)\\) steps! Here's a visualization of this process:
+
+This puzzle is split into two parts to help you learn the concept:
+
+- [Simple Version](./simple.md)
+  Start with a single block implementation where all data fits in shared memory. This helps understand the core parallel algorithm.
+
+- [Complete Version](./complete.md)
+  Then tackle the more challenging case of handling larger arrays that span multiple blocks, requiring coordination between blocks.
+
+Each version builds on the previous one, helping you develop a deep understanding of parallel prefix sum computation. The simple version establishes the fundamental algorithm, while the complete version shows how to scale it to larger datasets - a common requirement in real-world GPU applications.

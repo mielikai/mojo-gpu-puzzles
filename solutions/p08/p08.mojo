@@ -2,7 +2,7 @@ from memory import UnsafePointer, stack_allocation
 from gpu import thread_idx, block_idx, block_dim, barrier
 from gpu.host import DeviceContext
 from gpu.memory import AddressSpace
-from sys import sizeof
+from sys import size_of
 from testing import assert_equal
 
 alias TPB = 4
@@ -14,7 +14,7 @@ alias dtype = DType.float32
 
 # ANCHOR: add_10_shared_solution
 fn add_10_shared(
-    out: UnsafePointer[Scalar[dtype]],
+    output: UnsafePointer[Scalar[dtype]],
     a: UnsafePointer[Scalar[dtype]],
     size: Int,
 ):
@@ -31,11 +31,15 @@ fn add_10_shared(
 
     # wait for all threads to complete
     # works within a thread block
+    # Note: barrier is not strictly needed here since each thread only accesses its own shared memory location.
+    # However, it's included to teach proper shared memory synchronization patterns
+    # for more complex scenarios where threads need to coordinate access to shared data.
+    # For this specific puzzle, we can remove the barrier since each thread only accesses its own shared memory location.
     barrier()
 
     # process using shared memory
     if global_i < size:
-        out[global_i] = shared[local_i] + 10
+        output[global_i] = shared[local_i] + 10
 
 
 # ANCHOR_END: add_10_shared_solution

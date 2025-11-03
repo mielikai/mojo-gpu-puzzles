@@ -1,98 +1,215 @@
 from gpu import thread_idx, block_idx, block_dim, barrier
 from gpu.host import DeviceContext
+from gpu.memory import AddressSpace
 from layout import Layout, LayoutTensor
-from layout.tensor_builder import LayoutTensorBuild as tb
-from sys import sizeof
+from sys import size_of, argv
 from testing import assert_equal
 
 alias TPB = 8
-alias BATCH = 4
 alias SIZE = 6
-alias BLOCKS_PER_GRID = (1, BATCH)
+alias CONV = 3
+alias BLOCKS_PER_GRID = (1, 1)
 alias THREADS_PER_BLOCK = (TPB, 1)
 alias dtype = DType.float32
-alias in_layout = Layout.row_major(BATCH, SIZE)
-alias out_layout = Layout.row_major(BATCH, 1)
+alias in_layout = Layout.row_major(SIZE)
+alias out_layout = Layout.row_major(SIZE)
+alias conv_layout = Layout.row_major(CONV)
 
 
-# ANCHOR: axis_sum_solution
-fn axis_sum[
-    in_layout: Layout, out_layout: Layout
+# ANCHOR: conv_1d_simple_solution
+fn conv_1d_simple[
+    in_layout: Layout, out_layout: Layout, conv_layout: Layout
 ](
-    out: LayoutTensor[mut=False, dtype, out_layout],
+    output: LayoutTensor[mut=True, dtype, out_layout],
     a: LayoutTensor[mut=False, dtype, in_layout],
-    size: Int,
+    b: LayoutTensor[mut=False, dtype, conv_layout],
 ):
     global_i = block_dim.x * block_idx.x + thread_idx.x
     local_i = thread_idx.x
-    batch = block_idx.y
-    cache = tb[dtype]().row_major[TPB]().shared().alloc()
+    shared_a = LayoutTensor[
+        dtype,
+        Layout.row_major(SIZE),
+        MutableAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+    shared_b = LayoutTensor[
+        dtype,
+        Layout.row_major(CONV),
+        MutableAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+    if global_i < SIZE:
+        shared_a[local_i] = a[global_i]
 
-    # Visualize:
-    # Block(0,0): [T0,T1,T2,T3,T4,T5,T6,T7] -> Row 0: [0,1,2,3,4,5]
-    # Block(0,1): [T0,T1,T2,T3,T4,T5,T6,T7] -> Row 1: [6,7,8,9,10,11]
-    # Block(0,2): [T0,T1,T2,T3,T4,T5,T6,T7] -> Row 2: [12,13,14,15,16,17]
-    # Block(0,3): [T0,T1,T2,T3,T4,T5,T6,T7] -> Row 3: [18,19,20,21,22,23]
-
-    # each row is handled by each block bc we have grid_dim=(1, BATCH)
-
-    if local_i < size:
-        cache[local_i] = a[batch, local_i]
-    else:
-        # Add zero-initialize padding elements for later reduction
-        cache[local_i] = 0
+    if global_i < CONV:
+        shared_b[local_i] = b[global_i]
 
     barrier()
 
-    # do reduction sum per each block
-    stride = TPB // 2
-    while stride > 0:
-        if local_i < stride:
-            cache[local_i] += cache[local_i + stride]
+    # Note: this is unsafe as it enforces no guard so could access `shared_a` beyond its bounds
+    # local_sum = Scalar[dtype](0)
+    # for j in range(CONV):
+    #     if local_i + j < SIZE:
+    #         local_sum += shared_a[local_i + j] * shared_b[j]
 
-        barrier()
-        stride //= 2
+    # if global_i < SIZE:
+    #     out[global_i] = local_sum
 
-    # writing with local thread = 0 that has the sum for each batch
-    if local_i == 0:
-        out[batch, 0] = cache[0]
+    # Safe and correct:
+    if global_i < SIZE:
+        # Note: using `var` allows us to include the type in the type inference
+        # `out.element_type` is available in LayoutTensor
+        var local_sum: output.element_type = 0
+
+        # Note: `@parameter` decorator unrolls the loop at compile time given `CONV` is a compile-time constant
+        # See: https://docs.modular.com/mojo/manual/decorators/parameter/#parametric-for-statement
+        @parameter
+        for j in range(CONV):
+            # Bonus: do we need this check for this specific example with fixed SIZE, CONV
+            if local_i + j < SIZE:
+                local_sum += shared_a[local_i + j] * shared_b[j]
+
+        output[global_i] = local_sum
 
 
-# ANCHOR_END: axis_sum_solution
+# ANCHOR_END: conv_1d_simple_solution
+
+alias SIZE_2 = 15
+alias CONV_2 = 4
+alias BLOCKS_PER_GRID_2 = (2, 1)
+alias THREADS_PER_BLOCK_2 = (TPB, 1)
+alias in_2_layout = Layout.row_major(SIZE_2)
+alias out_2_layout = Layout.row_major(SIZE_2)
+alias conv_2_layout = Layout.row_major(CONV_2)
+
+
+# ANCHOR: conv_1d_block_boundary_solution
+fn conv_1d_block_boundary[
+    in_layout: Layout, out_layout: Layout, conv_layout: Layout, dtype: DType
+](
+    output: LayoutTensor[mut=True, dtype, out_layout],
+    a: LayoutTensor[mut=False, dtype, in_layout],
+    b: LayoutTensor[mut=False, dtype, conv_layout],
+):
+    global_i = block_dim.x * block_idx.x + thread_idx.x
+    local_i = thread_idx.x
+    # first: need to account for padding
+    shared_a = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB + CONV_2 - 1),
+        MutableAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+    shared_b = LayoutTensor[
+        dtype,
+        Layout.row_major(CONV_2),
+        MutableAnyOrigin,
+        address_space = AddressSpace.SHARED,
+    ].stack_allocation()
+    if global_i < SIZE_2:
+        shared_a[local_i] = a[global_i]
+    else:
+        shared_a[local_i] = 0
+
+    # second: load elements needed for convolution at block boundary
+    if local_i < CONV_2 - 1:
+        # indices from next block
+        next_idx = global_i + TPB
+        if next_idx < SIZE_2:
+            shared_a[TPB + local_i] = a[next_idx]
+        else:
+            # Initialize out-of-bounds elements to 0 to avoid reading from uninitialized memory
+            # which is an undefined behavior
+            shared_a[TPB + local_i] = 0
+
+    if local_i < CONV_2:
+        shared_b[local_i] = b[local_i]
+
+    barrier()
+
+    if global_i < SIZE_2:
+        var local_sum: output.element_type = 0
+
+        @parameter
+        for j in range(CONV_2):
+            if global_i + j < SIZE_2:
+                local_sum += shared_a[local_i + j] * shared_b[j]
+
+        output[global_i] = local_sum
+
+
+# ANCHOR_END: conv_1d_block_boundary_solution
 
 
 def main():
     with DeviceContext() as ctx:
-        out = ctx.enqueue_create_buffer[dtype](BATCH).enqueue_fill(0)
-        inp = ctx.enqueue_create_buffer[dtype](BATCH * SIZE).enqueue_fill(0)
-        with inp.map_to_host() as inp_host:
-            for row in range(BATCH):
-                for col in range(SIZE):
-                    inp_host[row * SIZE + col] = row * SIZE + col
+        size = SIZE_2 if argv()[1] == "--block-boundary" else SIZE
+        conv = CONV_2 if argv()[1] == "--block-boundary" else CONV
+        out = ctx.enqueue_create_buffer[dtype](size).enqueue_fill(0)
+        a = ctx.enqueue_create_buffer[dtype](size).enqueue_fill(0)
+        b = ctx.enqueue_create_buffer[dtype](conv).enqueue_fill(0)
+        with a.map_to_host() as a_host:
+            for i in range(size):
+                a_host[i] = i
 
-        out_tensor = LayoutTensor[mut=False, dtype, out_layout](
-            out.unsafe_ptr()
-        )
-        inp_tensor = LayoutTensor[mut=False, dtype, in_layout](inp.unsafe_ptr())
+        with b.map_to_host() as b_host:
+            for i in range(conv):
+                b_host[i] = i
 
-        ctx.enqueue_function[axis_sum[in_layout, out_layout]](
-            out_tensor,
-            inp_tensor,
-            SIZE,
-            grid_dim=BLOCKS_PER_GRID,
-            block_dim=THREADS_PER_BLOCK,
-        )
-
-        expected = ctx.enqueue_create_host_buffer[dtype](BATCH).enqueue_fill(0)
-        with inp.map_to_host() as inp_host:
-            for row in range(BATCH):
-                for col in range(SIZE):
-                    expected[row] += inp_host[row * SIZE + col]
+        if argv()[1] == "--simple":
+            var out_tensor = LayoutTensor[mut=False, dtype, out_layout](
+                out.unsafe_ptr()
+            )
+            var a_tensor = LayoutTensor[mut=False, dtype, in_layout](
+                a.unsafe_ptr()
+            )
+            var b_tensor = LayoutTensor[mut=False, dtype, conv_layout](
+                b.unsafe_ptr()
+            )
+            ctx.enqueue_function[
+                conv_1d_simple[in_layout, out_layout, conv_layout]
+            ](
+                out_tensor,
+                a_tensor,
+                b_tensor,
+                grid_dim=BLOCKS_PER_GRID,
+                block_dim=THREADS_PER_BLOCK,
+            )
+        elif argv()[1] == "--block-boundary":
+            var out_tensor = LayoutTensor[mut=False, dtype, out_2_layout](
+                out.unsafe_ptr()
+            )
+            var a_tensor = LayoutTensor[mut=False, dtype, in_2_layout](
+                a.unsafe_ptr()
+            )
+            var b_tensor = LayoutTensor[mut=False, dtype, conv_2_layout](
+                b.unsafe_ptr()
+            )
+            ctx.enqueue_function[
+                conv_1d_block_boundary[
+                    in_2_layout, out_2_layout, conv_2_layout, dtype
+                ]
+            ](
+                out_tensor,
+                a_tensor,
+                b_tensor,
+                grid_dim=BLOCKS_PER_GRID_2,
+                block_dim=THREADS_PER_BLOCK_2,
+            )
+        else:
+            raise Error("Invalid argument")
 
         ctx.synchronize()
+        expected = ctx.enqueue_create_host_buffer[dtype](size).enqueue_fill(0)
+
+        with a.map_to_host() as a_host, b.map_to_host() as b_host:
+            for i in range(size):
+                for j in range(conv):
+                    if i + j < size:
+                        expected[i] += a_host[i + j] * b_host[j]
 
         with out.map_to_host() as out_host:
-            print("out:", out)
+            print("out:", out_host)
             print("expected:", expected)
-            for i in range(BATCH):
+            for i in range(size):
                 assert_equal(out_host[i], expected[i])

@@ -2,11 +2,12 @@
 
 ## Overview
 
-Implement a kernel that adds 10 to each position of matrix `a` and stores it in `out`.
+Implement a kernel that adds 10 to each position of matrix `a` and stores it in `output`.
 
 **Note:** _You have fewer threads per block than the size of `a` in both directions._
 
-![Blocks 2D visualization](./media/videos/720p30/puzzle_07_viz.gif)
+<img src="./media/07.png" alt="Blocks 2D visualization" class="light-mode-img">
+<img src="./media/07d.png" alt="Blocks 2D visualization" class="dark-mode-img">
 
 ## Key concepts
 
@@ -17,7 +18,7 @@ Implement a kernel that adds 10 to each position of matrix `a` and stores it in 
 
 > 🔑 **2D thread indexing convention**
 >
-> We extend the block-based indexing from [puzzle 04](../puzzle_04/puzzle_04.md) to 2D:
+> We extend the block-based indexing from [puzzle 4](../puzzle_04/puzzle_04.md) to 2D:
 >
 > ```txt
 > Global position calculation:

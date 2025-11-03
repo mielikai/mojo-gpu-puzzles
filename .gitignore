@@ -12,6 +12,7 @@ book/html
 
 book/src/puzzle_*/media/images/
 book/src/puzzle_*/media/texts/
+book/src/puzzle_*/media/Tex/
 book/src/puzzle_*/media/videos/*/partial_movie_files/
 
 # Vercel
@@ -19,3 +20,18 @@ book/src/puzzle_*/media/videos/*/partial_movie_files/
 
 # Mojo artifacts
 *.mojopkg
+
+# rules
+.cursor/
+
+# llvm
+*.ll
+
+# Specific to this project
+solutions/p16/p16_optimized
+*.nsys-rep
+*.ncu-rep
+*.qdrep
+*.sqlite
+*.txt
+**/p*/p*_profiler

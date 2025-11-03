@@ -2,7 +2,7 @@ from memory import UnsafePointer, stack_allocation
 from gpu import thread_idx, block_idx, block_dim, barrier
 from gpu.host import DeviceContext
 from gpu.memory import AddressSpace
-from sys import sizeof
+from sys import size_of
 from testing import assert_equal
 
 # ANCHOR: add_10_shared
@@ -14,7 +14,7 @@ alias dtype = DType.float32
 
 
 fn add_10_shared(
-    out: UnsafePointer[Scalar[dtype]],
+    output: UnsafePointer[Scalar[dtype]],
     a: UnsafePointer[Scalar[dtype]],
     size: Int,
 ):

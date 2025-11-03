@@ -11,7 +11,7 @@ alias dtype = DType.float32
 
 
 fn broadcast_add(
-    out: UnsafePointer[Scalar[dtype]],
+    output: UnsafePointer[Scalar[dtype]],
     a: UnsafePointer[Scalar[dtype]],
     b: UnsafePointer[Scalar[dtype]],
     size: Int,
@@ -32,12 +32,12 @@ def main():
         b = ctx.enqueue_create_buffer[dtype](SIZE).enqueue_fill(0)
         with a.map_to_host() as a_host, b.map_to_host() as b_host:
             for i in range(SIZE):
-                a_host[i] = i
-                b_host[i] = i
+                a_host[i] = i + 1
+                b_host[i] = i * 10
 
             for i in range(SIZE):
                 for j in range(SIZE):
-                    expected[i * SIZE + j] = a_host[i] + b_host[j]
+                    expected[i * SIZE + j] = a_host[j] + b_host[i]
 
         ctx.enqueue_function[broadcast_add](
             out.unsafe_ptr(),

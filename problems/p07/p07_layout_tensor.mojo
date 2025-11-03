@@ -16,7 +16,7 @@ fn add_10_blocks_2d[
     out_layout: Layout,
     a_layout: Layout,
 ](
-    out: LayoutTensor[mut=True, dtype, out_layout],
+    output: LayoutTensor[mut=True, dtype, out_layout],
     a: LayoutTensor[mut=False, dtype, a_layout],
     size: Int,
 ):
@@ -40,6 +40,14 @@ def main():
         ).enqueue_fill(1)
 
         a = ctx.enqueue_create_buffer[dtype](SIZE * SIZE).enqueue_fill(1)
+
+        with a.map_to_host() as a_host:
+            for j in range(SIZE):
+                for i in range(SIZE):
+                    k = j * SIZE + i
+                    a_host[k] = k
+                    expected_buf[k] = k + 10
+
         a_tensor = LayoutTensor[dtype, a_layout, MutableAnyOrigin](
             a.unsafe_ptr()
         )
@@ -57,9 +65,6 @@ def main():
         expected_tensor = LayoutTensor[dtype, out_layout, MutableAnyOrigin](
             expected_buf.unsafe_ptr()
         )
-        for i in range(SIZE):
-            for j in range(SIZE):
-                expected_tensor[i, j] += 10
 
         with out_buf.map_to_host() as out_buf_host:
             print(
