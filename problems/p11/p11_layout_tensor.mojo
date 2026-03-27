@@ -30,7 +30,17 @@ def pooling[
 
     var global_i = block_dim.x * block_idx.x + thread_idx.x
     var local_i = thread_idx.x
-    # FIX ME IN (roughly 10 lines)
+    if global_i < size:
+        shared[local_i] = a[global_i]
+
+    barrier()
+     
+    if(global_i == 0):
+        output[global_i] = shared[local_i-2] + shared[local_i-1] + shared[local_i]
+    elif (global_i == 1):
+        output[global_i] = shared[local_i-2] + shared[local_i-1] + shared[local_i]
+    elif(global_i < size):
+        output[global_i] = shared[local_i-2] + shared[local_i-1] + shared[local_i]
 
 
 # ANCHOR_END: pooling_layout_tensor
@@ -45,7 +55,7 @@ def main() raises:
 
         with a.map_to_host() as a_host:
             for i in range(SIZE):
-                a_host[i] = i
+                a_host[i] = Float32(i)
 
         var out_tensor = LayoutTensor[dtype, layout, MutAnyOrigin](out)
         var a_tensor = LayoutTensor[dtype, layout, ImmutAnyOrigin](a)

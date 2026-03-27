@@ -1,3 +1,4 @@
+from std.memory import stack_allocation
 from std.testing import assert_equal
 from std.gpu.host import DeviceContext
 
@@ -24,8 +25,33 @@ def dot_product[
     b: LayoutTensor[dtype, in_layout, ImmutAnyOrigin],
     size: UInt,
 ):
-    # FILL ME IN (roughly 13 lines)
-    ...
+    var shared = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+# Why doesn't raw memory approach for shared mem work?
+#    var shared = stack_allocation[
+#        TPB,
+#        Scalar[dtype],
+#        address_space=AddressSpace.SHARED,
+#    ]()
+    var global_i = block_dim.x * block_idx.x + thread_idx.x
+    var local_i = thread_idx.x
+    if global_i < size:
+        shared[local_i] = a[global_i] * b[global_i]
+    barrier()
+
+    var stride : UInt = TPB // 2
+    while stride > 0:
+        if local_i < stride:
+            shared[local_i] += shared[local_i + stride]
+        barrier()
+        stride //= 2
+
+    if local_i == 0:
+        output[0] = shared[0]
 
 
 # ANCHOR_END: dot_product_layout_tensor
@@ -42,8 +68,8 @@ def main() raises:
 
         with a.map_to_host() as a_host, b.map_to_host() as b_host:
             for i in range(SIZE):
-                a_host[i] = i
-                b_host[i] = i
+                a_host[i] = Float32(i)
+                b_host[i] = Float32(i)
 
         var out_tensor = LayoutTensor[dtype, out_layout, MutAnyOrigin](out)
         var a_tensor = LayoutTensor[dtype, layout, ImmutAnyOrigin](a)

@@ -22,7 +22,9 @@ def add_10_blocks_2d[
 ):
     var row = block_dim.y * block_idx.y + thread_idx.y
     var col = block_dim.x * block_idx.x + thread_idx.x
-    # FILL ME IN (roughly 2 lines)
+    if(row < SIZE and col < SIZE):
+        output[row, col] = a[row, col] + 10
+
 
 
 # ANCHOR_END: add_10_blocks_2d_layout_tensor
@@ -44,8 +46,8 @@ def main() raises:
             for j in range(SIZE):
                 for i in range(SIZE):
                     var k = j * SIZE + i
-                    a_host[k] = k
-                    expected_buf[k] = k + 10
+                    a_host[k] = Float32(k)
+                    expected_buf[k] = Float32(k) + 10
 
         var a_tensor = LayoutTensor[dtype, a_layout, ImmutAnyOrigin](a)
 

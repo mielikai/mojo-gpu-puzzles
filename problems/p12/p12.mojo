@@ -18,8 +18,41 @@ def dot_product(
     b: UnsafePointer[Scalar[dtype], MutAnyOrigin],
     size: UInt,
 ):
-    # FILL ME IN (roughly 13 lines)
-    ...
+    var shared = stack_allocation[
+        TPB,
+        Scalar[dtype],
+        address_space=AddressSpace.SHARED,
+    ]()
+    var global_i = block_dim.x * block_idx.x + thread_idx.x
+    var local_i = thread_idx.x
+    if global_i < size:
+        shared[local_i] = a[global_i] * b[global_i]
+
+#    if local_i == 0:
+#        comptime for i in range(SIZE):
+#            print (shared[i])
+
+    barrier()
+# Hardcoded reduction for SIZE = 8
+    if local_i < 4:
+        shared[local_i] = shared[local_i] + shared[local_i+4]
+
+    barrier()
+ #   if local_i == 0:
+ #       print("-----")
+ #       comptime for i in range(SIZE):
+ #           print (shared[i])
+# 4 -> 2
+    if local_i < 2:
+        shared[local_i] = shared[local_i] + shared[local_i+2]
+
+    barrier()
+#    if local_i == 0:
+#        print("-----")
+#        comptime for i in range(SIZE):
+#            print (shared[i])
+    if local_i == 0:
+        output[0] = shared[0] + shared[1]
 
 
 # ANCHOR_END: dot_product
@@ -35,8 +68,8 @@ def main() raises:
         b.enqueue_fill(0)
         with a.map_to_host() as a_host, b.map_to_host() as b_host:
             for i in range(SIZE):
-                a_host[i] = i
-                b_host[i] = i
+                a_host[i] = Float32(i)
+                b_host[i] = Float32(i)
 
         ctx.enqueue_function[dot_product, dot_product](
             out,

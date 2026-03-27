@@ -18,7 +18,8 @@ def add_10_2d(
 ):
     var row = thread_idx.y
     var col = thread_idx.x
-    # FILL ME IN (roughly 2 lines)
+    if(row < size and col < size):
+        output[row, col] = a[row, col] + 10
 
 
 # ANCHOR_END: add_10_2d_layout_tensor
@@ -38,7 +39,7 @@ def main() raises:
         a.enqueue_fill(0)
         with a.map_to_host() as a_host:
             for i in range(SIZE * SIZE):
-                a_host[i] = i
+                a_host[i] = Float32(i)
                 expected[i] = a_host[i] + 10
 
         var a_tensor = LayoutTensor[dtype, layout, MutAnyOrigin](a)

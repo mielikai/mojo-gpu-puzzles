@@ -16,7 +16,8 @@ def add_10_guard(
     size: UInt,
 ):
     var i = thread_idx.x
-    # FILL ME IN (roughly 2 lines)
+    if(i < size):
+        output[i] = a[i] + 10
 
 
 # ANCHOR_END: add_10_guard
@@ -30,7 +31,7 @@ def main() raises:
         a.enqueue_fill(0)
         with a.map_to_host() as a_host:
             for i in range(SIZE):
-                a_host[i] = i
+                a_host[i] = Float32(i)
 
         ctx.enqueue_function[add_10_guard, add_10_guard](
             out,
@@ -45,7 +46,7 @@ def main() raises:
         ctx.synchronize()
 
         for i in range(SIZE):
-            expected[i] = i + 10
+            expected[i] = Float32(i) + 10
 
         with out.map_to_host() as out_host:
             print("out:", out_host)

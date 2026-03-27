@@ -17,7 +17,9 @@ def add_10_blocks_2d(
 ):
     var row = block_dim.y * block_idx.y + thread_idx.y
     var col = block_dim.x * block_idx.x + thread_idx.x
-    # FILL ME IN (roughly 2 lines)
+    if(row < size and col < size):
+        i = row * size + col
+        output[i] = a[i] + 10
 
 
 # ANCHOR_END: add_10_blocks_2d
@@ -36,8 +38,8 @@ def main() raises:
             for j in range(SIZE):
                 for i in range(SIZE):
                     var k = j * SIZE + i
-                    a_host[k] = k
-                    expected[k] = k + 10
+                    a_host[k] = Float32(k)
+                    expected[k] = Float32(k) + 10
 
         ctx.enqueue_function[add_10_blocks_2d, add_10_blocks_2d](
             out,
