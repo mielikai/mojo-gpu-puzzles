@@ -26,7 +26,48 @@ def conv_1d_simple[
 ):
     var global_i = block_dim.x * block_idx.x + thread_idx.x
     var local_i = Int(thread_idx.x)
-    # FILL ME IN (roughly 14 lines)
+       
+#    if(global_i == 0):
+#        for i in range(SIZE):
+#            output[i] = 0
+#            for j in range(CONV):
+#                if i + j < SIZE:
+#                    output[i] += a[i + j] * b[j]
+
+#    i = Int(global_i)
+#    output[i] = 0
+#    for j in range(CONV):
+#        if i + j < SIZE:
+#            output[i] += a[i + j] * b[j]
+
+    # Allocate shared memory using tensor builder
+    var shared_a = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+    var shared_b = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+
+    if global_i < SIZE:
+        shared_a[local_i] = a[global_i]
+
+    if global_i < CONV:
+        shared_b[local_i] = b[global_i]
+
+    i = Int(global_i)
+    if i < SIZE:
+        var local_output : output.element_type = 0
+        # unroll loop
+        comptime for j in range(CONV):
+            if i + j < SIZE:
+                local_output += shared_a[i + j] * shared_b[j]
+        output[global_i] = local_output
 
 
 # ANCHOR_END: conv_1d_simple
@@ -50,7 +91,51 @@ def conv_1d_block_boundary[
 ):
     var global_i = Int(block_dim.x * block_idx.x + thread_idx.x)
     var local_i = Int(thread_idx.x)
-    # FILL ME IN (roughly 18 lines)
+    
+    var shared_a = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB + CONV_2 - 1), # the overlap region: CONV_2 - 1
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+    var shared_b = LayoutTensor[
+        dtype,
+        Layout.row_major(CONV_2), # convolution mask: CONV_2
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+
+    # Copy base data
+    if local_i < SIZE_2:
+        shared_a[local_i] = a[global_i]
+    else:
+        shared_a[local_i] = 0
+
+    barrier()
+
+    # Boundary data in the overlap region
+    # The same global_i was used to copy the start of the base data (CONV_2 - 1) earlier and is now used to copy the overlap data (CONV_2 - 1)
+    if local_i < CONV_2 - 1:
+        next_idx = global_i + TPB
+        if next_idx < SIZE_2:
+            shared_a[TPB + local_i] = a[next_idx]
+        else:
+            # Initialize out-of-bounds elements to 0 to avoid reading from uninitialized memory
+            # which is an undefined behavior
+            shared_a[TPB + local_i] = 0
+
+    # copy convolution kernel to sm
+    if local_i < CONV_2:
+        shared_b[local_i] = b[local_i]
+
+    if global_i < SIZE_2:
+        var local_output : output.element_type = 0
+        # unroll loop
+        comptime for j in range(CONV_2):
+            if global_i + j < SIZE_2:
+                local_output += shared_a[local_i + j] * shared_b[j]
+        output[global_i] = local_output
+
 
 
 # ANCHOR_END: conv_1d_block_boundary
@@ -68,11 +153,11 @@ def main() raises:
         b.enqueue_fill(0)
         with a.map_to_host() as a_host:
             for i in range(size):
-                a_host[i] = i
+                a_host[i] = Float32(i)
 
         with b.map_to_host() as b_host:
             for i in range(conv):
-                b_host[i] = i
+                b_host[i] = Float32(i)
 
         if len(argv()) != 2 or argv()[1] not in [
             "--simple",
