@@ -24,7 +24,33 @@ def prefix_sum_simple[
 ):
     var global_i = block_dim.x * block_idx.x + thread_idx.x
     var local_i = thread_idx.x
-    # FILL ME IN (roughly 18 lines)
+    var shared = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+    if global_i < size:
+        shared[local_i] = a[global_i]
+
+    barrier()
+
+    var offset : UInt = 1
+    for i in range(Int(log2(Float32(TPB)))):
+        var current_val: output.element_type = 0
+        if local_i >= offset and local_i < size:
+            current_val = shared[local_i - offset]  # Each thread reads the value it needs
+
+        barrier() #  ensures all reads from shared memory array complete before writing to the same array
+        if local_i >= offset and local_i < size:
+            shared[local_i] += current_val # Each thread adds its read value to its current position
+
+        barrier() # synchronize before the next iteration
+        offset *= 2
+
+    if global_i < size:
+        output[global_i] = shared[local_i]
+
 
 
 # ANCHOR_END: prefix_sum_simple
@@ -48,7 +74,60 @@ def prefix_sum_local_phase[
 ):
     var global_i = block_dim.x * block_idx.x + thread_idx.x
     var local_i = thread_idx.x
-    # FILL ME IN (roughly 20 lines)
+    var shared = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+
+    # Load data into shared memory
+    # Example with SIZE_2=15, TPB=8, BLOCKS=2:
+    # Block 0 shared mem: [0,1,2,3,4,5,6,7]
+    # Block 1 shared mem: [8,9,10,11,12,13,14,uninitialized]
+    # Note: The last position remains uninitialized since global_i >= size,
+    # but this is safe because that thread doesn't participate in computation
+    if global_i < size:
+        shared[local_i] = a[global_i]
+
+    barrier()
+
+    # Compute local prefix sum using parallel reduction
+    # This uses a tree-based algorithm with log(TPB) iterations
+    # Iteration 1 (offset=1):
+    #   Block 0: [0,0+1,2+1,3+2,4+3,5+4,6+5,7+6] = [0,1,3,5,7,9,11,13]
+    # Iteration 2 (offset=2):
+    #   Block 0: [0,1,3+0,5+1,7+3,9+5,11+7,13+9] = [0,1,3,6,10,14,18,22]
+    # Iteration 3 (offset=4):
+    #   Block 0: [0,1,3,6,10+0,14+1,18+3,22+6] = [0,1,3,6,10,15,21,28]
+    #   Block 1 follows same pattern to get [8,17,27,38,50,63,77,???]
+    var offset = UInt(1)
+    for i in range(Int(log2(Scalar[dtype](TPB)))):
+        var current_val: output.element_type = 0
+        if local_i >= offset and local_i < TPB:
+            current_val = shared[local_i - offset]  # read
+
+        barrier()
+        if local_i >= offset and local_i < TPB:
+            shared[local_i] += current_val  # write
+
+        barrier()
+        offset *= 2
+
+    # Write local results to output
+    # Block 0 writes: [0,1,3,6,10,15,21,28]
+    # Block 1 writes: [8,17,27,38,50,63,77,???]
+    if global_i < size:
+        output[global_i] = shared[local_i]
+
+    # Store block sums in auxiliary space
+    # Block 0: Thread 7 stores shared[7] == 28 at position size+0 (position 15)
+    # Block 1: Thread 7 stores shared[7] == ??? at position size+1 (position 16).  This sum is not needed for the final output.
+    # This gives us: [0,1,3,6,10,15,21,28, 8,17,27,38,50,63,77, 28,???]
+    #                                                           ↑  ↑
+    #                                                     Block sums here
+    if local_i == TPB - 1:
+        output[size + block_idx.x] = shared[local_i]
 
 
 # Kernel 2: Add block sums to their respective blocks
@@ -56,7 +135,17 @@ def prefix_sum_block_sum_phase[
     layout: Layout
 ](output: LayoutTensor[dtype, layout, MutAnyOrigin], size: UInt):
     var global_i = block_dim.x * block_idx.x + thread_idx.x
-    # FILL ME IN (roughly 3 lines)
+
+    # Second pass: add previous block's sum to each element
+    # Block 0: No change needed - already correct
+    # Block 1: Add Block 0's sum (28) to each element
+    #   Before: [8,17,27,38,50,63,77]
+    #   After: [36,45,55,66,78,91,105]
+    # Final result combines both blocks:
+    # [0,1,3,6,10,15,21,28, 36,45,55,66,78,91,105]
+    if block_idx.x > 0 and global_i < size:
+        var prev_block_sum = output[size + block_idx.x - 1]
+        output[global_i] += prev_block_sum
 
 
 # ANCHOR_END: prefix_sum_complete
@@ -88,7 +177,7 @@ def main() raises:
 
         with a.map_to_host() as a_host:
             for i in range(size):
-                a_host[i] = i
+                a_host[i] = Float32(i)
 
         if use_simple:
             a_tensor = LayoutTensor[dtype, layout, ImmutAnyOrigin](a)
