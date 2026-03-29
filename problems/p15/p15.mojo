@@ -27,8 +27,49 @@ def axis_sum[
     var global_i = block_dim.x * block_idx.x + thread_idx.x
     var local_i = thread_idx.x
     var batch = block_idx.y
-    # FILL ME IN (roughly 15 lines)
+    var cache = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
 
+    # Visualize:
+    # Block(0,0): [T0,T1,T2,T3,T4,T5,T6,T7] -> Row 0: [0,1,2,3,4,5]
+    # Block(0,1): [T0,T1,T2,T3,T4,T5,T6,T7] -> Row 1: [6,7,8,9,10,11]
+    # Block(0,2): [T0,T1,T2,T3,T4,T5,T6,T7] -> Row 2: [12,13,14,15,16,17]
+    # Block(0,3): [T0,T1,T2,T3,T4,T5,T6,T7] -> Row 3: [18,19,20,21,22,23]
+
+    # each row is handled by each block bc we have grid_dim=(1, BATCH)
+
+    if local_i < size:
+        cache[local_i] = a[batch, local_i]
+    else:
+        # Add zero-initialize padding elements for later reduction
+        cache[local_i] = 0
+
+    barrier()
+
+    # do reduction sum per each block
+    var stride = UInt(TPB // 2)
+    while stride > 0:
+        # Read phase: all threads read the values they need first to avoid race conditions
+        var temp_val: output.element_type = 0
+        if local_i < stride:
+            temp_val = cache[local_i + stride]
+
+        barrier()
+
+        # Write phase: all threads safely write their computed values
+        if local_i < stride:
+            cache[local_i] += temp_val
+
+        barrier()
+        stride //= 2
+
+    # writing with local thread = 0 that has the sum for each batch
+    if local_i == 0:
+        output[batch, 0] = cache[0]
 
 # ANCHOR_END: axis_sum
 
@@ -42,7 +83,7 @@ def main() raises:
         with inp.map_to_host() as inp_host:
             for row in range(BATCH):
                 for col in range(SIZE):
-                    inp_host[row * SIZE + col] = row * SIZE + col
+                    inp_host[row * SIZE + col] = Float32(row * SIZE + col)
 
         var out_tensor = LayoutTensor[dtype, out_layout, MutAnyOrigin](out)
         var inp_tensor = LayoutTensor[dtype, in_layout, ImmutAnyOrigin](inp)
