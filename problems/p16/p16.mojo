@@ -25,7 +25,14 @@ def naive_matmul[
 ):
     var row = block_dim.y * block_idx.y + thread_idx.y
     var col = block_dim.x * block_idx.x + thread_idx.x
-    # FILL ME IN (roughly 6 lines)
+    
+    if row < size and col < size:
+        var acc: output.element_type = 0
+
+        comptime for k in range(size):
+            acc += a[row, k] * b[k, col]
+
+        output[row, col] = acc
 
 
 # ANCHOR_END: naive_matmul
@@ -43,7 +50,33 @@ def single_block_matmul[
     var col = block_dim.x * block_idx.x + thread_idx.x
     var local_row = thread_idx.y
     var local_col = thread_idx.x
-    # FILL ME IN (roughly 12 lines)
+
+    var a_shared = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB, TPB),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+    var b_shared = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB, TPB),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+
+    if row < size and col < size:
+        a_shared[local_row, local_col] = a[row, col]
+        b_shared[local_row, local_col] = b[row, col]
+
+    barrier()
+
+    if row < size and col < size:
+        var acc: output.element_type = 0
+
+        comptime for k in range(size):
+            acc += a_shared[local_row, k] * b_shared[k, local_col]
+
+        output[row, col] = acc
 
 
 # ANCHOR_END: single_block_matmul
@@ -66,7 +99,48 @@ def matmul_tiled[
     var local_col = thread_idx.x
     var tiled_row = block_idx.y * TPB + thread_idx.y
     var tiled_col = block_idx.x * TPB + thread_idx.x
-    # FILL ME IN (roughly 20 lines)
+    
+    var a_shared = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB, TPB),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+    var b_shared = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB, TPB),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+
+    var acc: output.element_type = 0
+
+    # Iterate over tiles to compute matrix product
+    comptime for tile in range((size + TPB - 1) // TPB):
+        # Load A tile - global row stays the same, col determined by tile
+        if tiled_row < size and (tile * TPB + local_col) < size:
+            a_shared[local_row, local_col] = a[
+                tiled_row, tile * TPB + local_col
+            ]
+
+        # Load B tile - row determined by tile, global col stays the same
+        if (tile * TPB + local_row) < size and tiled_col < size:
+            b_shared[local_row, local_col] = b[
+                tile * TPB + local_row, tiled_col
+            ]
+
+        barrier()
+
+        # Matrix multiplication within the tile
+        if tiled_row < size and tiled_col < size:
+            comptime for k in range(min(Int(TPB), Int(size - tile * TPB))):
+                acc += a_shared[local_row, k] * b_shared[k, local_col]
+
+        barrier()
+
+    # Write out final result
+    if tiled_row < size and tiled_col < size:
+        output[tiled_row, tiled_col] = acc
 
 
 # ANCHOR_END: matmul_tiled
@@ -98,8 +172,8 @@ def main() raises:
                 for col in range(size):
                     var val = row * size + col
                     # row major: placing elements row by row
-                    inp1_host[row * size + col] = val
-                    inp2_host[row * size + col] = Float32(2.0) * val
+                    inp1_host[row * size + col] = Float32(val)
+                    inp2_host[row * size + col] = Float32(2.0) * Float32(val)
 
             # inp1 @ inp2.T
             for i in range(size):
