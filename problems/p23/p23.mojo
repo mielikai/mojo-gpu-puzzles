@@ -2,7 +2,7 @@ from std.gpu import thread_idx, block_dim, block_idx, barrier
 from std.gpu.host import DeviceContext
 from std.gpu.host.compile import get_gpu_target
 from layout import Layout, LayoutTensor
-from std.utils import IndexList
+from std.utils import Index, IndexList
 from std.math import log2
 from std.algorithm.functional import elementwise, vectorize
 from std.sys import simd_width_of, argv, align_of
@@ -29,12 +29,18 @@ def elementwise_add[
     @always_inline
     def add[
         simd_width: Int, rank: Int, alignment: Int = align_of[dtype]()
-    ](indices: IndexList[rank]) capturing -> None:
-        var idx = indices[0]
-        print("idx:", idx)
-        # FILL IN (2 to 4 lines)
+    ](indices: IndexList[rank]) capturing -> None: # capturing: Allows access to variables from the outer scope (the input/output tensors)
+        var idx = indices[0] # Extract linear index for 1D operations
+#        print("idx:", idx)
 
-    elementwise[add, SIMD_WIDTH, target="gpu"](a.size(), ctx)
+        a_simd = a.aligned_load[simd_width](Index(idx))  # Load 4 consecutive floats (GPU-dependent)
+        b_simd = b.aligned_load[simd_width](Index(idx))  # Load 4 consecutive floats (GPU-dependent)
+        result = a_simd + b_simd  # SIMD addition of 4 elements simultaneously (GPU-dependent)
+        output.store[simd_width](Index(idx), result)  # Store 4 results at once (GPU-dependent)
+
+    # Executes func[width, rank](indices), possibly as sub-tasks, for a suitable combination of width and indices 
+    # The GPU automatically determines how many threads to launch: total_size // SIMD_WIDTH
+    elementwise[add, SIMD_WIDTH, target="gpu"](a.size(), ctx) # https://docs.modular.com/mojo/std/algorithm/functional/elementwise/
 
 
 # ANCHOR_END: elementwise_add
@@ -63,14 +69,29 @@ def tiled_elementwise_add[
         simd_width: Int, rank: Int, alignment: Int = align_of[dtype]()
     ](indices: IndexList[rank]) capturing -> None:
         var tile_id = indices[0]
-        print("tile_id:", tile_id)
+#        print("tile_id:", tile_id)
         var output_tile = output.tile[tile_size](tile_id)
         var a_tile = a.tile[tile_size](tile_id)
         var b_tile = b.tile[tile_size](tile_id)
 
-        # FILL IN (6 lines at most)
+        tile_id = indices[0]  # Each thread gets one tile to process
+
+        # The tile[size](id) method creates a view of size consecutive elements starting at id × size
+        out_tile = output.tile[tile_size](tile_id)
+        a_tile = a.tile[tile_size](tile_id)
+        b_tile = b.tile[tile_size](tile_id)
+
+        comptime for i in range(tile_size):
+            # Process element i within the current tile
+            a_vec = a_tile.load[simd_width](Index(i))  # Load from position i in tile
+            b_vec = b_tile.load[simd_width](Index(i))  # Load from position i in tile
+            result = a_vec + b_vec                 # scalar addition
+            out_tile.store[simd_width](Index(i), result)  # Store to position i in tile
+
 
     var num_tiles = (size + tile_size - 1) // tile_size
+
+    # Note the 1 instead of SIMD_WIDTH - each thread processes one entire tile sequentially.
     elementwise[process_tiles, 1, target="gpu"](num_tiles, ctx)
 
 
@@ -101,17 +122,30 @@ def manual_vectorized_tiled_elementwise_add[
         num_threads_per_tile: Int, rank: Int, alignment: Int = align_of[dtype]()
     ](indices: IndexList[rank]) capturing -> None:
         var tile_id = indices[0]
-        print("tile_id:", tile_id)
+#        print("tile_id:", tile_id)
         var output_tile = output.tile[chunk_size](tile_id)
         var a_tile = a.tile[chunk_size](tile_id)
         var b_tile = b.tile[chunk_size](tile_id)
 
-        # FILL IN (7 lines at most)
+        comptime chunk_size = tile_size * simd_width  # 32 * 4 = 128
+
+        comptime for i in range(tile_size):  # i = 0, 1, 2, ..., 31
+            global_start = tile_id * chunk_size + i * simd_width
+            # For tile_id=0: global_start = 0, 4, 8, 12, ..., 124
+            # For tile_id=1: global_start = 128, 132, 136, 140, ..., 252
+
+            var a_vec = a.aligned_load[simd_width](Index(global_start))
+            var b_vec = b.aligned_load[simd_width](Index(global_start))
+            var ret = a_vec + b_vec          # SIMD addition
+            # print("tile:", tile_id, "simd_group:", i, "global_start:", global_start, "a_vec:", a_vec, "b_vec:", b_vec, "result:", ret)
+
+            output.store[simd_width](Index(global_start), ret)
+
 
     # Number of tiles needed: each tile processes chunk_size elements
     var num_tiles = (size + chunk_size - 1) // chunk_size
     elementwise[
-        process_manual_vectorized_tiles, num_threads_per_tile, target="gpu"
+        process_manual_vectorized_tiles, num_threads_per_tile, target="gpu" # num_threads_per_tile = 1
     ](num_tiles, ctx)
 
 
@@ -143,22 +177,37 @@ def vectorize_within_tiles_elementwise_add[
         var tile_start = tile_id * tile_size
         var tile_end = min(tile_start + tile_size, size)
         var actual_tile_size = tile_end - tile_start
-        print(
-            "tile_id:",
-            tile_id,
-            "tile_start:",
-            tile_start,
-            "tile_end:",
-            tile_end,
-            "actual_tile_size:",
-            actual_tile_size,
-        )
+#        print(
+#            "tile_id:",
+#            tile_id,
+#            "tile_start:",
+#            tile_start,
+#            "tile_end:",
+#            tile_end,
+#            "actual_tile_size:",
+#            actual_tile_size,
+#        )
 
-        # FILL IN (9 lines at most)
+        def vectorized_add[
+            width: Int
+        ](i: Int) unified {read tile_start, read a, read b, mut output}: # unified: Allows access to variables from the outer scope ?
+            var global_idx = tile_start + i
+            if global_idx + width <= size:
+                var a_vec = a.aligned_load[width](Index(global_idx))
+                var b_vec = b.aligned_load[width](Index(global_idx))
+                var result = a_vec + b_vec
+                output.store[width](Index(global_idx), result)
+
+        # Use vectorize within each tile
+        # Simplifies SIMD optimized loops by mapping a function across a range from 0 to size, 
+        # incrementing by simd_width at each step. 
+        # The remainder of size % simd_width will run in separate iterations.
+        vectorize[simd_width](actual_tile_size, vectorized_add)
+
 
     var num_tiles = (size + tile_size - 1) // tile_size
     elementwise[
-        process_tile_with_vectorize, num_threads_per_tile, target="gpu"
+        process_tile_with_vectorize, num_threads_per_tile, target="gpu" # num_threads_per_tile = 1
     ](num_tiles, ctx)
 
 
@@ -181,8 +230,8 @@ def benchmark_elementwise_parameterized[
 
     with a.map_to_host() as a_host, b_buf.map_to_host() as b_host:
         for i in range(test_size):
-            a_host[i] = 2 * i
-            b_host[i] = 2 * i + 1
+            a_host[i] = 2 * Float32(i)
+            b_host[i] = 2 * Float32(i) + 1
 
     var a_tensor = LayoutTensor[mut=False, dtype, layout, MutAnyOrigin](
         a.unsafe_ptr()
@@ -202,7 +251,7 @@ def benchmark_elementwise_parameterized[
         )
 
     b.iter_custom[elementwise_workflow](bench_ctx)
-    keep(out.unsafe_ptr())
+    keep(out.unsafe_ptr()) # prevents the compiler from optimizing away your computation as “unused code”
     bench_ctx.synchronize()
 
 
@@ -222,8 +271,8 @@ def benchmark_tiled_parameterized[
 
     with a.map_to_host() as a_host, b_buf.map_to_host() as b_host:
         for i in range(test_size):
-            a_host[i] = 2 * i
-            b_host[i] = 2 * i + 1
+            a_host[i] = 2 * Float32(i)
+            b_host[i] = 2 * Float32(i) + 1
 
     var a_tensor = LayoutTensor[mut=False, dtype, layout](a.unsafe_ptr())
     var b_tensor = LayoutTensor[mut=False, dtype, layout](b_buf.unsafe_ptr())
@@ -237,7 +286,7 @@ def benchmark_tiled_parameterized[
         ](out_tensor, a_tensor, b_tensor, ctx)
 
     b.iter_custom[tiled_workflow](bench_ctx)
-    keep(out.unsafe_ptr())
+    keep(out.unsafe_ptr()) # prevents the compiler from optimizing away your computation as “unused code
     bench_ctx.synchronize()
 
 
@@ -257,8 +306,8 @@ def benchmark_manual_vectorized_parameterized[
 
     with a.map_to_host() as a_host, b_buf.map_to_host() as b_host:
         for i in range(test_size):
-            a_host[i] = 2 * i
-            b_host[i] = 2 * i + 1
+            a_host[i] = 2 * Float32(i)
+            b_host[i] = 2 * Float32(i) + 1
 
     var a_tensor = LayoutTensor[mut=False, dtype, layout](a.unsafe_ptr())
     var b_tensor = LayoutTensor[mut=False, dtype, layout](b_buf.unsafe_ptr())
@@ -272,7 +321,7 @@ def benchmark_manual_vectorized_parameterized[
         ](out_tensor, a_tensor, b_tensor, ctx)
 
     b.iter_custom[manual_vectorized_workflow](bench_ctx)
-    keep(out.unsafe_ptr())
+    keep(out.unsafe_ptr()) # prevents the compiler from optimizing away your computation as “unused code
     bench_ctx.synchronize()
 
 
@@ -292,8 +341,8 @@ def benchmark_vectorized_parameterized[
 
     with a.map_to_host() as a_host, b_buf.map_to_host() as b_host:
         for i in range(test_size):
-            a_host[i] = 2 * i
-            b_host[i] = 2 * i + 1
+            a_host[i] = 2 * Float32(i)
+            b_host[i] = 2 * Float32(i) + 1
 
     var a_tensor = LayoutTensor[mut=False, dtype, layout](a.unsafe_ptr())
     var b_tensor = LayoutTensor[mut=False, dtype, layout](b_buf.unsafe_ptr())
@@ -307,7 +356,7 @@ def benchmark_vectorized_parameterized[
         ](out_tensor, a_tensor, b_tensor, ctx)
 
     b.iter_custom[vectorized_workflow](bench_ctx)
-    keep(out.unsafe_ptr())
+    keep(out.unsafe_ptr()) # prevents the compiler from optimizing away your computation as “unused code
     bench_ctx.synchronize()
 
 
@@ -324,8 +373,8 @@ def main() raises:
 
     with a.map_to_host() as a_host, b.map_to_host() as b_host:
         for i in range(SIZE):
-            a_host[i] = 2 * i
-            b_host[i] = 2 * i + 1
+            a_host[i] = 2 * Float32(i)
+            b_host[i] = 2 * Float32(i) + 1
             expected[i] = a_host[i] + b_host[i]
 
     var a_tensor = LayoutTensor[mut=False, dtype, layout](a.unsafe_ptr())
