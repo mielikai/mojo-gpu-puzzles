@@ -72,7 +72,10 @@ from tensor import InputTensor, OutputTensor
 from std.memory import UnsafePointer
 from std.gpu.host import DeviceBuffer
 
-
+# The name passed to the decorator ("conv1d") is what Python code will use to call this operation
+# The struct must have an execute method with the correct signature
+# OutputTensor and InputTensor types define the interface for Python data
+# DeviceContextPtr provides access to the execution environment
 @compiler.register("conv1d")
 struct Conv1DCustomOp:
     @staticmethod
@@ -109,7 +112,16 @@ struct Conv1DCustomOp:
                 0,
             )
 
-            # FILL ME IN with 1 line calling our conv1d_kernel
+            comptime kernel = conv1d_kernel[
+                in_layout, out_layout, conv_layout, input_size, conv_size
+            ]
+            gpu_ctx.enqueue_function[kernel, kernel]( # https://docs.modular.com/mojo/std/gpu/host/device_context/DeviceContext/#enqueue_function
+                output_tensor,
+                input_tensor,
+                kernel_tensor,
+                grid_dim=BLOCKS_PER_GRID,
+                block_dim=(TPB, 1),
+            )
 
         elif target == "cpu":
             # we can fallback to CPU
