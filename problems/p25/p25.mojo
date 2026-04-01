@@ -27,8 +27,13 @@ def neighbor_difference[
     var global_i = Int(block_dim.x * block_idx.x + thread_idx.x)
     var lane = Int(lane_id())
 
-    # FILL IN (roughly 7 lines)
-
+    # output[i] = input[i+1] − input[i]
+    current_val = input[lane]
+    next_val = shuffle_down(current_val, 1)
+    if lane < WARP_SIZE - 1:
+        output[lane] = next_val - current_val
+    else:
+        output[lane] = 0
 
 # ANCHOR_END: neighbor_difference
 
@@ -53,7 +58,24 @@ def moving_average_3[
     var global_i = Int(block_dim.x * block_idx.x + thread_idx.x)
     var lane = Int(lane_id())
 
-    # FILL IN (roughly 10 lines)
+    # output[i]=1/3*(input[i] + input[i+1] + input[i+2])
+    if global_i < size:
+        # Step 1: Acquire all needed data via multiple shuffles
+        current_val = input[global_i]                   # Direct access
+        next_val = shuffle_down(current_val, 1)         # Right neighbor
+        next_next_val = shuffle_down(current_val, 2)    # Right+1 neighbor
+
+        # Step 2: Adaptive computation based on available data
+        if lane < WARP_SIZE - 2: # and global_i < size - 2:
+            # Full 3-point stencil available
+            output[global_i] = (current_val + next_val + next_next_val) / 3.0
+        elif lane < WARP_SIZE - 1: # and global_i < size - 1:
+            # Only 2-point stencil available (near warp boundary)
+            output[global_i] = (current_val + next_val) / 2.0
+        else:
+            # No stencil possible (at warp boundary)
+            output[global_i] = current_val
+
 
 
 # ANCHOR_END: moving_average_3
