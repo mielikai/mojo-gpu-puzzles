@@ -27,7 +27,10 @@ def butterfly_pair_swap[
     """
     var global_i = Int(block_dim.x * block_idx.x + thread_idx.x)
 
-    # FILL ME IN (4 lines)
+    # output[i] = input[i⊕1]
+    current_val = input[global_i]
+    swapped_val = shuffle_xor(current_val, 1)  # XOR with 1 creates pairs
+    output[global_i] = swapped_val
 
 
 # ANCHOR_END: butterfly_pair_swap
@@ -49,7 +52,16 @@ def butterfly_parallel_max[
     """
     var global_i = Int(block_dim.x * block_idx.x + thread_idx.x)
 
-    # FILL ME IN (roughly 7 lines)
+    if global_i < size:
+        max_val = input[global_i]  # Start with local value
+
+        # Butterfly reduction tree: dynamic for any WARP_SIZE
+        offset : UInt32 = WARP_SIZE // 2
+        while offset > 0: # 16, 8, 4, 2, 1 -> max(0,16) -> max(0,16,8,24) ...
+            max_val = max(max_val, shuffle_xor(max_val, offset))
+            offset //= 2
+
+        output[global_i] = max_val  # All lanes have global maximum    
 
 
 # ANCHOR_END: butterfly_parallel_max
@@ -80,7 +92,26 @@ def butterfly_conditional_max[
         var current_val = input[global_i]
         var min_val = current_val
 
-        # FILL ME IN (roughly 11 lines)
+        if global_i < size:
+            current_val = input[global_i]
+            min_val = current_val  # Track minimum separately
+
+            # Butterfly reduction for both max and min log_2(WARP_SIZE}) steps)
+            offset : UInt32 = WARP_SIZE // 2
+            while offset > 0:
+                neighbor_val = shuffle_xor(current_val, offset)
+                current_val = max(current_val, neighbor_val)    # Max reduction
+
+                min_neighbor_val = shuffle_xor(min_val, offset)
+                min_val = min(min_val, min_neighbor_val)        # Min reduction
+
+                offset //= 2
+
+        # Conditional output based on lane parity
+        if lane % 2 == 0:
+            output[global_i] = current_val  # Even lanes: maximum
+        else:
+            output[global_i] = min_val      # Odd lanes: minimum
 
 
 # ANCHOR_END: butterfly_conditional_max
@@ -115,7 +146,10 @@ def warp_inclusive_prefix_sum[
     """
     var global_i = Int(block_dim.x * block_idx.x + thread_idx.x)
 
-    # FILL ME IN (roughly 4 lines)
+    if global_i < size:
+        current_val = input[global_i]
+        scan_result = prefix_sum[exclusive=False](rebind[Scalar[dtype]](current_val)) # https://docs.modular.com/mojo/std/builtin/rebind
+        output[global_i] = scan_result
 
 
 # ANCHOR_END: warp_inclusive_prefix_sum
