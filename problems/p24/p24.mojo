@@ -2,10 +2,10 @@ from std.math import ceildiv
 from std.gpu import thread_idx, block_idx, block_dim, barrier, lane_id
 from std.gpu.host import DeviceContext, HostBuffer, DeviceBuffer
 from std.gpu.memory import AddressSpace
-from std.gpu.primitives.warp import sum as warp_sum, WARP_SIZE
+from std.gpu.primitives.warp import sum as warp_sum, WARP_SIZE, lane_group_sum, sum
 from std.algorithm.functional import elementwise
 from layout import Layout, LayoutTensor
-from std.utils import IndexList
+from std.utils import Index, IndexList
 from std.sys import argv, simd_width_of, align_of
 from std.testing import assert_equal
 from std.random import random_float64
@@ -80,7 +80,17 @@ def simple_warp_dot_product[
     b: LayoutTensor[dtype, in_layout, ImmutAnyOrigin],
 ):
     var global_i = Int(block_dim.x * block_idx.x + thread_idx.x)
-    # FILL IN (6 lines at most)
+
+    var partial_product: Scalar[dtype] = 0
+    if global_i < size:
+        # https://docs.modular.com/mojo/std/builtin/simd/SIMD/#reduce_add
+        partial_product = (a[global_i] * b[global_i]).reduce_add() # Values in Mojo are SIMD-based, so a[global_i] * b[global_i] returns a SIMD vector. Use .reduce_add() to sum the vector into a scalar.
+
+    #total = warp_sum(partial_product)
+    total = sum(partial_product) # https://docs.modular.com/mojo/std/gpu/primitives/warp/sum/
+
+    if lane_id() == 0: # write once
+        output[global_i // WARP_SIZE] = total # function can be used in cases where there is more than one warp. i.e. The result from each warp is written to the unique location global_i // WARP_SIZE
 
 
 # ANCHOR_END: simple_warp_kernel
@@ -106,11 +116,28 @@ def functional_warp_dot_product[
         simd_width: Int, rank: Int, alignment: Int = align_of[dtype]()
     ](indices: IndexList[rank]) capturing -> None:
         var idx = indices[0]
-        print("idx:", idx)
-        # FILL IN (10 lines at most)
+        #print("idx:", idx)
+
+        # Each thread computes one partial product
+        var partial_product: Scalar[dtype] = 0.0
+        if idx < size:
+            var a_val = a.load[1](Index(idx))
+            var b_val = b.load[1](Index(idx))
+            partial_product = a_val * b_val
+        else:
+            partial_product = 0.0
+
+        # Warp magic - combines all WARP_SIZE partial products!
+        var total = warp_sum(partial_product)
+
+        # Only lane 0 writes the result (all lanes have the same total)
+        if lane_id() == 0:
+            # Store a SIMD vector to the tensor at the specified 2D coordinates - https://docs.modular.com/mojo/kernels/layout/layout_tensor/LayoutTensor/#store
+            #output.store[1](Index(idx // WARP_SIZE), total)
+            output[idx // WARP_SIZE] = total
 
     # Launch exactly size == WARP_SIZE threads (one warp) to process all elements
-    elementwise[compute_dot_product, 1, target="gpu"](size, ctx)
+    elementwise[compute_dot_product, 1, target="gpu"](size, ctx) # https://docs.modular.com/mojo/std/algorithm/functional/elementwise/
 
 
 # ANCHOR_END: functional_warp_approach
@@ -139,7 +166,7 @@ def rand_int[
 ](buff: DeviceBuffer[dtype], min: Int = 0, max: Int = 100) raises:
     with buff.map_to_host() as buff_host:
         for i in range(size):
-            buff_host[i] = Int(random_float64(min, max))
+            buff_host[i] = Int(random_float64(Float64(min), Float64(max)))
 
 
 def check_result[
@@ -322,8 +349,8 @@ def main() raises:
 
             with a.map_to_host() as a_host, b.map_to_host() as b_host:
                 for i in range(SIZE):
-                    a_host[i] = i
-                    b_host[i] = i
+                    a_host[i] = Float32(i)
+                    b_host[i] = Float32(i)
 
             if argv()[1] == "--traditional":
                 ctx.enqueue_function[
@@ -355,6 +382,9 @@ def main() raises:
                 functional_warp_dot_product[
                     in_layout, out_layout, dtype, SIMD_WIDTH, 1, SIZE
                 ](out_tensor, a_tensor, b_tensor, ctx)
+            else:
+                print("Usage: --traditional | --kernel | --functional | --benchmark")
+                return
             expected_output[dtype, n_warps](expected, a, b)
             check_result[dtype, n_warps, True](out, expected)
             print("Puzzle 24 complete ✅")
